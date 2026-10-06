@@ -1,6 +1,7 @@
-// Каркас: навигация по вкладкам, перерисовка при изменении данных, тема, офлайн-режим.
+// Каркас: навигация по вкладкам и разделам, перерисовка при изменении данных, тема, офлайн-режим.
 import * as S from './store.js';
 import * as V from './views.js';
+import { PAGES } from './screens.js';
 import * as F from './forms.js';
 import { h, s } from './util.js';
 
@@ -21,11 +22,13 @@ const TABS = [
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
-let shownTab = null;
+let shown = null;
 
-const tabFromHash = () => {
+const routeFromHash = () => {
   const id = location.hash.slice(1);
-  return TABS.some((t) => t.id === id) ? id : 'today';
+  if (PAGES[id]) return { id, tab: 'more', view: PAGES[id] };
+  const t = TABS.find((x) => x.id === id) || TABS[0];
+  return { id: t.id, tab: t.id, view: t.view };
 };
 
 function applyTheme() {
@@ -35,25 +38,25 @@ function applyTheme() {
 }
 
 function render() {
-  const id = tabFromHash();
-  const tab = TABS.find((x) => x.id === id);
+  const r = routeFromHash();
   const y = window.scrollY;
-  const same = shownTab === id;
-  const view = tab.view();
+  const same = shown === r.id;
+  let view;
+  try {
+    view = r.view();
+  } catch (e) {
+    console.error(e);
+    view = h('div', { class: 'view' }, h('p', { class: 'warn' }, 'Этот экран не открылся из-за ошибки. Остальные работают, данные не тронуты.'), h('a', { href: '#today' }, 'На главный экран'));
+  }
   if (S.didSaveFail()) view.prepend(h('div', { class: 'banner bad' }, 'Данные не сохраняются: память браузера недоступна или заполнена. Сделай копию в разделе «Ещё».'));
   app.replaceChildren(view);
   nav.replaceChildren(
     ...TABS.map((x) =>
-      h(
-        'a',
-        { href: '#' + x.id, class: 'nav-item' + (x.id === id ? ' on' : ''), 'aria-current': x.id === id ? 'page' : null },
-        s('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, s('path', { d: ICONS[x.id] })),
-        h('span', {}, x.label),
-      ),
+      h('a', { href: '#' + x.id, class: 'nav-item' + (x.id === r.tab ? ' on' : ''), 'aria-current': x.id === r.tab ? 'page' : null }, s('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, s('path', { d: ICONS[x.id] })), h('span', {}, x.label)),
     ),
   );
   window.scrollTo(0, same ? y : 0);
-  shownTab = id;
+  shown = r.id;
   applyTheme();
 }
 
@@ -61,12 +64,10 @@ S.subscribe(render);
 window.addEventListener('hashchange', render);
 window.addEventListener('popstate', () => {
   // закрытие шторки кнопкой «назад» не должно перерисовывать вкладку
-  if (shownTab !== tabFromHash()) render();
+  if (shown !== routeFromHash().id) render();
 });
 
-document.getElementById('fab').addEventListener('click', () => {
-  F.itemForm(S.get().meta.lastKind, null);
-});
+document.getElementById('fab').addEventListener('click', () => F.itemForm(S.get().meta.lastKind, null));
 
 render();
 

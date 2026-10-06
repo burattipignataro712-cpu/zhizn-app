@@ -1,6 +1,6 @@
 // Офлайн-режим: оболочка приложения лежит в кэше, обновление подтягивается в фоне.
 // При изменении файлов приложения поднять номер версии.
-const CACHE = 'zhizn-v1';
+const CACHE = 'zhizn-v2';
 const FILES = [
   './',
   './index.html',
@@ -12,6 +12,10 @@ const FILES = [
   './js/forms.js',
   './js/rows.js',
   './js/views.js',
+  './js/screens.js',
+  './js/forms-extra.js',
+  './js/xlsx.js',
+  './js/statement.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',

@@ -1,7 +1,7 @@
-// Экраны: Сегодня, План, Год, Анализ (цифры и карта), Ещё.
+// Основные экраны: Сегодня, План, Год, Анализ (цифры и карта), Ещё.
 import * as S from './store.js';
 import * as F from './forms.js';
-import { taskRow, eventRow, recordRow, dot } from './rows.js';
+import { taskRow, eventRow, recordRow, dueRow, dot } from './rows.js';
 import {
   h, s, today, parse, ymd, addDays, mondayOf, monthStart, monthEnd, MONTHS, MONTHS_SHORT, WD_SHORT, cap,
   fmtDay, fmtDayFull, fmtShort, isWeekend, money, hrs, pct, daysBetween,
@@ -14,68 +14,98 @@ export const ui = {
   mapSel: null,
 };
 
-// ---- общие кусочки ----
-const card = (title, ...kids) => h('section', { class: 'card' }, title ? h('h3', {}, title) : null, ...kids);
-const empty = (text) => h('p', { class: 'empty' }, text);
-const pageHead = (title, ...right) => h('header', { class: 'page-head' }, h('h1', {}, title), h('div', { class: 'head-actions' }, ...right));
-const navBtn = (label, onClick, text) => h('button', { class: 'icon-btn', type: 'button', 'aria-label': label, onClick }, text);
-function seg(options, value, onChange) {
+// ---- общие кусочки (используются и в screens.js) ----
+export const card = (title, ...kids) => h('section', { class: 'card' }, title ? h('h3', {}, title) : null, ...kids);
+export const empty = (text) => h('p', { class: 'empty' }, text);
+export const pageHead = (title, ...right) => h('header', { class: 'page-head' }, h('h1', {}, title), h('div', { class: 'head-actions' }, ...right));
+export const navBtn = (label, onClick, text) => h('button', { class: 'icon-btn', type: 'button', 'aria-label': label, onClick }, text);
+export const kpi = (label, value) => h('div', { class: 'kpi' }, h('span', { class: 'kpi-v' }, value), h('span', { class: 'kpi-l' }, label));
+export function seg(options, value, onChange) {
   return h('div', { class: 'seg' }, options.map(([v, l]) => h('button', { type: 'button', class: 'seg-btn' + (v === value ? ' on' : ''), onClick: () => onChange(v) }, l)));
 }
+export const progress = (value, color, over) => h('div', { class: 'progress' + (over ? ' over' : '') }, h('div', { class: 'progress-fill', style: { width: `${Math.min(100, Math.max(0, value))}%`, ...(color ? { background: color } : {}) } }));
 const rerender = () => S.touch();
 
 // ---- СЕГОДНЯ ----
+function moodCard(date) {
+  const m = S.moodOn(date) || { mood: 0, energy: 0, sleep: 0 };
+  const scale = (key, label) =>
+    h(
+      'div',
+      { class: 'scale' },
+      h('span', { class: 'scale-l' }, label),
+      h('div', { class: 'scale-b' }, [1, 2, 3, 4, 5].map((n) => h('button', { type: 'button', class: 'scale-btn' + (m[key] === n ? ' on' : ''), 'aria-label': `${label} ${n}`, onClick: () => S.setMood(date, { [key]: m[key] === n ? 0 : n }) }, String(n)))),
+    );
+  const sleepOpts = [[5, '≤5'], [6, '6'], [7, '7'], [8, '8'], [9, '9+']];
+  return card(
+    'Как ты сегодня',
+    scale('mood', 'Настроение'),
+    scale('energy', 'Энергия'),
+    h('div', { class: 'scale' }, h('span', { class: 'scale-l' }, 'Сон, ч'), h('div', { class: 'scale-b' }, sleepOpts.map(([v, l]) => h('button', { type: 'button', class: 'scale-btn' + (m.sleep === v ? ' on' : ''), onClick: () => S.setMood(date, { sleep: m.sleep === v ? 0 : v }) }, l)))),
+  );
+}
+
 export function todayView() {
   const t = today();
   const late = S.overdue(t);
   const events = S.eventsOn(t);
   const tasks = S.tasksOn(t);
   const recs = S.recordsOn(t);
+  const due = S.dueSubs(t);
   const spent = recs.filter((r) => r.type === 'expense').reduce((a, r) => a + r.amount, 0);
   const hours = recs.filter((r) => r.type === 'time').reduce((a, r) => a + r.hours, 0);
-  const d = parse(t);
   const doneN = tasks.filter((x) => x.done).length;
+  const st = S.get();
 
-  const view = h('div', { class: 'view' }, pageHead(cap(fmtDayFull(t))));
+  const view = h('div', { class: 'view' }, h('header', { class: 'hero' }, h('span', { class: 'hero-sub' }, cap(parse(t).toLocaleDateString('ru-RU', { weekday: 'long' }))), h('h1', {}, fmtDay(t))));
 
   const c = S.counts();
-  const lastExport = S.get().meta.lastExport;
-  const total = c.tasks + c.events + c.money + c.time;
-  if (total > 20 && (!lastExport || daysBetween(lastExport, t) > 14)) {
+  const lastExport = st.meta.lastExport;
+  if (c.tasks + c.events + c.money + c.time > 20 && (!lastExport || daysBetween(lastExport, t) > 14)) {
     view.append(h('div', { class: 'banner' }, 'Копии данных давно не было. Данные лежат только в этом телефоне. ', h('a', { href: '#more' }, 'Сделать копию')));
   }
+  const dow = (parse(t).getDay() + 6) % 7;
+  const wk = mondayOf(t);
+  if (dow >= 5 && !S.reviewOf(wk)) view.append(h('a', { class: 'banner soft', href: '#review' }, 'Выходные: самое время для разбора недели. Займёт пять минут.'));
 
   view.append(
-    h(
-      'div',
-      { class: 'quick' },
-      ['expense', 'time', 'task', 'event'].map((k) => h('button', { type: 'button', class: 'quick-btn', onClick: () => F.itemForm(k, null, { date: t }) }, '+ ' + F.KIND_LABEL[k].toLowerCase())),
-    ),
-    h(
-      'div',
-      { class: 'kpis' },
-      kpi('Потрачено', money(spent)),
-      kpi('Время', hrs(hours)),
-      kpi('Задачи', tasks.length ? `${doneN} из ${tasks.length}` : '0'),
-    ),
+    h('div', { class: 'quick' }, ['expense', 'time', 'task', 'event'].map((k) => h('button', { type: 'button', class: 'quick-btn', onClick: () => F.itemForm(k, null, { date: t }) }, '+ ' + F.KIND_LABEL[k].toLowerCase()))),
   );
-
-  if (late.length) {
+  if (st.templates.length) {
     view.append(
-      card(
-        `Просрочено: ${late.length}`,
-        late.map((x) => taskRow(x, { showDate: true })),
-        h('button', { class: 'btn ghost', type: 'button', onClick: () => S.rescheduleOverdue(t) }, 'Перенести всё на сегодня'),
+      h(
+        'div',
+        { class: 'tpl-row' },
+        st.templates.map((tp) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'tpl',
+              onClick: () => {
+                S.applyTemplate(tp, t);
+                F.toast(`Добавлено: ${tp.label}`);
+              },
+            },
+            dot(S.area(tp.area).color),
+            tp.label,
+            tp.kind === 'expense' || tp.kind === 'income' ? h('em', {}, money(tp.amount)) : tp.kind === 'time' ? h('em', {}, hrs(tp.hours)) : null,
+          ),
+        ),
       ),
     );
   }
-  view.append(
-    card('План на сегодня', events.map((e) => eventRow(e)), tasks.map((x) => taskRow(x)), !events.length && !tasks.length ? empty('На сегодня ничего не запланировано.') : null),
-  );
+  view.append(h('div', { class: 'kpis' }, kpi('Потрачено', money(spent)), kpi('Время', hrs(hours)), kpi('Задачи', tasks.length ? `${doneN} из ${tasks.length}` : '0')));
+
+  if (due.length) view.append(card('Платежи', due.map(({ sub, due: d }) => dueRow(sub, d, t))));
+  if (late.length) {
+    view.append(card(`Просрочено: ${late.length}`, late.map((x) => taskRow(x, { showDate: true })), h('button', { class: 'btn ghost', type: 'button', onClick: () => S.rescheduleOverdue(t) }, 'Перенести всё на сегодня')));
+  }
+  view.append(card('План на сегодня', events.map((e) => eventRow(e)), tasks.map((x) => taskRow(x)), !events.length && !tasks.length ? empty('На сегодня ничего не запланировано.') : null));
+  view.append(moodCard(t));
   if (recs.length) view.append(card('Записи за сегодня', recs.map((r) => recordRow(r))));
   return view;
 }
-const kpi = (label, value) => h('div', { class: 'kpi' }, h('span', { class: 'kpi-v' }, value), h('span', { class: 'kpi-l' }, label));
 
 // ---- ДЕНЬ (шторка) ----
 export function openDay(date) {
@@ -83,14 +113,19 @@ export function openDay(date) {
   const events = S.eventsOn(date);
   const tasks = S.tasksOn(date);
   const recs = S.recordsOn(date);
+  const subs = S.subsOn(date);
+  const t = today();
   const adds = ['task', 'event', 'expense', 'time'].map((k) => h('button', { type: 'button', class: 'quick-btn', onClick: () => F.itemForm(k, null, { date, onDone: redo }) }, '+ ' + F.KIND_LABEL[k].toLowerCase()));
   F.openSheet(
     cap(fmtDayFull(date)),
     h('div', { class: 'quick' }, adds),
     events.length ? h('div', { class: 'group' }, h('h4', {}, 'События'), events.map((e) => eventRow(e, { onDone: redo }))) : null,
     tasks.length ? h('div', { class: 'group' }, h('h4', {}, 'Задачи'), tasks.map((x) => taskRow(x, { onDone: redo }))) : null,
+    subs.length
+      ? h('div', { class: 'group' }, h('h4', {}, 'Платежи'), subs.map((sb) => (S.isPaid(sb, date) ? h('div', { class: 'row' }, h('div', { class: 'row-main' }, h('span', { class: 'row-title' }, sb.name), h('span', { class: 'row-sub' }, `${money(sb.amount)} · оплачено`))) : dueRow(sb, date, date <= t ? t : date))))
+      : null,
     recs.length ? h('div', { class: 'group' }, h('h4', {}, 'Записи'), recs.map((r) => recordRow(r, { onDone: redo }))) : null,
-    !events.length && !tasks.length && !recs.length ? empty('В этот день пока пусто.') : null,
+    !events.length && !tasks.length && !recs.length && !subs.length ? empty('В этот день пока пусто.') : null,
   );
 }
 
@@ -98,33 +133,22 @@ export function openDay(date) {
 export function planView() {
   const p = ui.plan;
   const t = today();
-  const view = h(
-    'div',
-    { class: 'view' },
-    pageHead('План'),
-    seg([['week', 'Неделя'], ['inbox', 'Без даты']], p.tab, (v) => ((p.tab = v), rerender())),
-  );
+  const view = h('div', { class: 'view' }, pageHead('План'), seg([['week', 'Неделя'], ['inbox', 'Без даты']], p.tab, (v) => ((p.tab = v), rerender())));
 
   if (p.tab === 'inbox') {
     const list = S.inbox();
-    view.append(
-      card(
-        'Задачи без срока',
-        list.map((x) => taskRow(x)),
-        !list.length ? empty('Пусто. Всё, что не привязано к дате, попадает сюда.') : null,
-        h('button', { class: 'btn ghost', type: 'button', onClick: () => F.itemForm('task', null, { noDate: true }) }, '+ задача без срока'),
-      ),
-    );
+    view.append(card('Задачи без срока', list.map((x) => taskRow(x)), !list.length ? empty('Пусто. Всё, что не привязано к дате, попадает сюда.') : null, h('button', { class: 'btn ghost', type: 'button', onClick: () => F.itemForm('task', null, { noDate: true }) }, '+ задача без срока')));
     return view;
   }
 
   const end = addDays(p.week, 6);
+  const par = S.parityOf(p.week);
   view.append(
     h(
       'div',
       { class: 'range-bar' },
       navBtn('Прошлая неделя', () => ((p.week = addDays(p.week, -7)), rerender()), '‹'),
-      h('button', { class: 'range-label', type: 'button', onClick: () => ((p.week = mondayOf(t)), rerender()) }, `${fmtDay(p.week)} - ${fmtDay(end)}`),
+      h('button', { class: 'range-label', type: 'button', onClick: () => ((p.week = mondayOf(t)), rerender()) }, `${fmtDay(p.week)} - ${fmtDay(end)}`, par ? h('small', {}, par === 'odd' ? 'нечётная' : 'чётная') : null),
       navBtn('Следующая неделя', () => ((p.week = addDays(p.week, 7)), rerender()), '›'),
     ),
   );
@@ -136,14 +160,16 @@ export function planView() {
     const d = addDays(p.week, i);
     const ev = S.eventsOn(d);
     const tk = S.tasksOn(d);
+    const sb = S.subsOn(d);
     view.append(
       h(
         'section',
         { class: 'card day-card' + (d === t ? ' is-today' : '') },
-        h('div', { class: 'day-head' }, h('h3', {}, cap(fmtShort(d)) + ' ' + parse(d).toLocaleDateString('ru-RU', { month: 'short' }).replace('.', '')), h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Добавить на этот день', onClick: () => F.itemForm('task', null, { date: d }) }, '+')),
+        h('div', { class: 'day-head' }, h('h3', {}, cap(fmtShort(d)) + ' ' + parse(d).toLocaleDateString('ru-RU', { month: 'short' }).replace('.', '')), h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Добавить на этот день', onClick: () => F.itemForm('task', null, { date: d }) }, '+')),
         ev.map((e) => eventRow(e)),
         tk.map((x) => taskRow(x)),
-        !ev.length && !tk.length ? h('p', { class: 'empty small' }, 'Свободно') : null,
+        sb.map((x) => h('div', { class: 'row' }, h('span', { class: 'row-time' }, 'платёж'), h('div', { class: 'row-main' }, h('span', { class: 'row-title' }, x.name), h('span', { class: 'row-sub' }, `${money(x.amount)}${S.isPaid(x, d) ? ' · оплачено' : ''}`)))),
+        !ev.length && !tk.length && !sb.length ? h('p', { class: 'empty small' }, 'Свободно') : null,
       ),
     );
   }
@@ -167,18 +193,12 @@ export function yearView() {
   };
   view.append(
     pageHead('Календарь'),
-    h(
-      'div',
-      { class: 'range-bar' },
-      navBtn('Назад', () => step(-1), '‹'),
-      h('button', { class: 'range-label', type: 'button', onClick: () => ((c.year = new Date().getFullYear()), (c.month = c.month == null ? null : new Date().getMonth()), rerender()) }, title),
-      navBtn('Вперёд', () => step(1), '›'),
-    ),
+    h('div', { class: 'range-bar' }, navBtn('Назад', () => step(-1), '‹'), h('button', { class: 'range-label', type: 'button', onClick: () => ((c.year = new Date().getFullYear()), (c.month = c.month == null ? null : new Date().getMonth()), rerender()) }, title), navBtn('Вперёд', () => step(1), '›')),
   );
   if (c.month != null) view.append(h('button', { class: 'btn ghost', type: 'button', onClick: () => ((c.month = null), rerender()) }, 'Показать весь год'));
 
   if (c.month == null) {
-    view.append(h('p', { class: 'legend' }, 'Цвет клетки: загрузка дня. Точки: события по областям. Квадрат: есть открытые задачи. Нажми на день или на название месяца.'));
+    view.append(h('p', { class: 'legend' }, 'Фон клетки: загрузка дня. Точки: события по областям. Квадрат: есть открытые задачи. Нажми на день или на название месяца.'));
     view.append(h('div', { class: 'year-grid' }, MONTHS.map((_, m) => monthCard(c.year, m, false, t))));
   } else {
     view.append(monthCard(c.year, c.month, true, t));
@@ -195,47 +215,43 @@ function monthCard(y, m, big, t) {
     const d = ymd(new Date(y, m, day));
     const ev = S.eventsOn(d);
     const open = S.tasksOn(d).filter((x) => !x.done).length;
-    const load = ev.length + open;
+    const load = ev.length + open + S.subsOn(d).length;
     const level = load === 0 ? 0 : load === 1 ? 1 : load <= 3 ? 2 : 3;
     const colors = [...new Set(ev.map((e) => S.area(e.area).color))].slice(0, 3);
-    const cell = h(
-      'button',
-      { type: 'button', class: `day l${level}` + (d === t ? ' today' : '') + (isWeekend(d) ? ' weekend' : ''), 'aria-label': fmtDayFull(d), onClick: () => openDay(d) },
-      h('span', { class: 'dn' }, String(day)),
-      big
-        ? ev.slice(0, 2).map((e) => h('span', { class: 'chip-ev', style: { background: S.area(e.area).color } }, e.title))
-        : h('span', { class: 'marks' }, colors.map((c) => h('i', { style: { background: c } })), open ? h('b', {}) : null),
-      big && ev.length > 2 ? h('span', { class: 'more-ev' }, `+${ev.length - 2}`) : null,
-      big && open ? h('span', { class: 'open-n' }, `${open} зад.`) : null,
+    grid.append(
+      h(
+        'button',
+        { type: 'button', class: `day l${level}` + (d === t ? ' today' : '') + (isWeekend(d) ? ' weekend' : ''), 'aria-label': fmtDayFull(d), onClick: () => openDay(d) },
+        h('span', { class: 'dn' }, String(day)),
+        big ? ev.slice(0, 2).map((e) => h('span', { class: 'chip-ev', style: { background: S.area(e.area).color } }, e.title)) : h('span', { class: 'marks' }, colors.map((c) => h('i', { style: { background: c } })), open ? h('b', {}) : null),
+        big && ev.length > 2 ? h('span', { class: 'more-ev' }, `+${ev.length - 2}`) : null,
+        big && open ? h('span', { class: 'open-n' }, `${open} зад.`) : null,
+      ),
     );
-    grid.append(cell);
   }
   if (big) return grid;
   return h('div', { class: 'month' }, h('button', { class: 'month-title', type: 'button', onClick: () => ((ui.cal.month = m), rerender()) }, MONTHS[m]), grid);
 }
 
 // ---- АНАЛИЗ ----
-function periodRange() {
-  const { period, anchor } = ui.stats;
+function rangeOf(period, anchor) {
   const d = parse(anchor);
   if (period === 'week') {
     const f = mondayOf(anchor);
     const to = addDays(f, 6);
     return { from: f, to, label: `${fmtDay(f)} - ${fmtDay(to)}`, bucket: 'day' };
   }
-  if (period === 'month') {
-    return { from: monthStart(d.getFullYear(), d.getMonth()), to: monthEnd(d.getFullYear(), d.getMonth()), label: `${cap(MONTHS[d.getMonth()])} ${d.getFullYear()}`, bucket: 'day' };
-  }
+  if (period === 'month') return { from: monthStart(d.getFullYear(), d.getMonth()), to: monthEnd(d.getFullYear(), d.getMonth()), label: `${cap(MONTHS[d.getMonth()])} ${d.getFullYear()}`, bucket: 'day' };
   return { from: monthStart(d.getFullYear(), 0), to: monthEnd(d.getFullYear(), 11), label: String(d.getFullYear()), bucket: 'month' };
 }
-function shiftPeriod(dir) {
-  const st = ui.stats;
-  const d = parse(st.anchor);
-  if (st.period === 'week') st.anchor = addDays(st.anchor, 7 * dir);
-  else if (st.period === 'month') st.anchor = ymd(new Date(d.getFullYear(), d.getMonth() + dir, 1));
-  else st.anchor = ymd(new Date(d.getFullYear() + dir, 0, 1));
-  rerender();
-}
+const shiftAnchor = (period, anchor, dir) => {
+  const d = parse(anchor);
+  if (period === 'week') return addDays(anchor, 7 * dir);
+  if (period === 'month') return ymd(new Date(d.getFullYear(), d.getMonth() + dir, 1));
+  return ymd(new Date(d.getFullYear() + dir, 0, 1));
+};
+export const periodRange = () => rangeOf(ui.stats.period, ui.stats.anchor);
+const sumOf = (tot, k) => Object.values(tot).reduce((a, x) => a + x[k], 0);
 
 export function statsView() {
   const st = ui.stats;
@@ -246,15 +262,14 @@ export function statsView() {
     pageHead('Анализ'),
     seg([['numbers', 'Цифры'], ['map', 'Карта связей']], st.tab, (v) => ((st.tab = v), rerender())),
     seg([['week', 'Неделя'], ['month', 'Месяц'], ['year', 'Год']], st.period, (v) => ((st.period = v), (st.anchor = today()), rerender())),
-    h('div', { class: 'range-bar' }, navBtn('Назад', () => shiftPeriod(-1), '‹'), h('button', { class: 'range-label', type: 'button', onClick: () => ((st.anchor = today()), rerender()) }, r.label), navBtn('Вперёд', () => shiftPeriod(1), '›')),
+    h('div', { class: 'range-bar' }, navBtn('Назад', () => ((st.anchor = shiftAnchor(st.period, st.anchor, -1)), rerender()), '‹'), h('button', { class: 'range-label', type: 'button', onClick: () => ((st.anchor = today()), rerender()) }, r.label), navBtn('Вперёд', () => ((st.anchor = shiftAnchor(st.period, st.anchor, 1)), rerender()), '›')),
   );
   const tot = S.totals(r.from, r.to);
   const areas = S.get().areas;
-  const sum = (k) => areas.reduce((a, x) => a + tot[x.id][k], 0);
-  const H = sum('hours');
-  const E = sum('expense');
-  const I = sum('income');
-  if (H === 0 && E === 0 && I === 0 && sum('done') + sum('open') === 0) {
+  const H = sumOf(tot, 'hours');
+  const E = sumOf(tot, 'expense');
+  const I = sumOf(tot, 'income');
+  if (H === 0 && E === 0 && I === 0 && sumOf(tot, 'done') + sumOf(tot, 'open') === 0) {
     view.append(card(null, empty('За этот период нет записей. Добавь время, расходы или задачи кнопкой +, и здесь появятся цифры.')));
     return view;
   }
@@ -265,6 +280,7 @@ export function statsView() {
 
   view.append(
     h('div', { class: 'kpis four' }, kpi('Расходы', money(E)), kpi('Доходы', money(I)), kpi('Баланс', (I - E >= 0 ? '+' : '−') + money(Math.abs(I - E))), kpi('Время', hrs(H))),
+    comparisonCard(r, tot, areas),
     card('Куда уходит время', barList(areas.map((a) => ({ a, v: tot[a.id].hours })), (v) => hrs(v), H)),
     card('Куда уходят деньги', barList(areas.map((a) => ({ a, v: tot[a.id].expense })), (v) => money(v), E)),
   );
@@ -280,23 +296,61 @@ export function statsView() {
     return h('div', { class: 'bar-col', title: st.metric === 'hours' ? hrs(v) : money(v) }, h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill ' + st.metric, style: { height: `${Math.max(v > 0 ? 3 : 0, (v / max) * 100)}%` } })), h('span', { class: 'bar-lbl' }, label));
   });
   view.append(card('Динамика', seg([['hours', 'Часы'], ['expense', 'Расходы']], st.metric, (v) => ((st.metric = v), rerender())), h('div', { class: 'bars' + (keys.length > 14 ? ' dense' : '') }, bars)));
-  const done = sum('done');
-  const open = sum('open');
-  view.append(card('Задачи со сроком в периоде', h('p', { class: 'big-line' }, `${done} сделано, ${open} открыто` + (done + open ? ` (${pct(done, done + open)}% выполнено)` : '')), sum('overdue') ? h('p', { class: 'warn' }, `Просрочено: ${sum('overdue')}`) : null));
+  const done = sumOf(tot, 'done');
+  const open = sumOf(tot, 'open');
+  view.append(card('Задачи в периоде', h('p', { class: 'big-line' }, `${done} сделано, ${open} открыто` + (done + open ? ` (${pct(done, done + open)}% выполнено)` : '')), sumOf(tot, 'overdue') ? h('p', { class: 'warn' }, `Просрочено: ${sumOf(tot, 'overdue')}`) : null));
+  const mc = moodStatsCard(r);
+  if (mc) view.append(mc);
   return view;
+}
+
+function prevPeriod() {
+  const st = ui.stats;
+  return rangeOf(st.period, shiftAnchor(st.period, st.anchor, -1));
+}
+
+function comparisonCard(r, tot, areas) {
+  const p = prevPeriod();
+  const pt = S.totals(p.from, p.to);
+  const cur = { Время: sumOf(tot, 'hours'), Расходы: sumOf(tot, 'expense'), Доходы: sumOf(tot, 'income'), 'Задач сделано': sumOf(tot, 'done') };
+  const prev = { Время: sumOf(pt, 'hours'), Расходы: sumOf(pt, 'expense'), Доходы: sumOf(pt, 'income'), 'Задач сделано': sumOf(pt, 'done') };
+  if (!Object.values(prev).some((v) => v > 0)) return card('Сравнение с прошлым периодом', empty(`За ${p.label} записей нет, сравнивать пока не с чем.`));
+  const fmt = { Время: hrs, Расходы: money, Доходы: money, 'Задач сделано': (v) => String(Math.round(v)) };
+  const goodUp = { Время: null, Расходы: false, Доходы: true, 'Задач сделано': true };
+  const rows = Object.keys(cur).map((k) => {
+    const d = cur[k] - prev[k];
+    const rel = prev[k] > 0 ? Math.round((d / prev[k]) * 100) : null;
+    const tone = d === 0 || goodUp[k] == null ? '' : (d > 0) === goodUp[k] ? 'good' : 'bad';
+    return h('div', { class: 'cmp-row' }, h('span', { class: 'cmp-l' }, k), h('span', { class: 'cmp-v' }, fmt[k](cur[k])), h('span', { class: 'cmp-p' }, fmt[k](prev[k])), h('span', { class: 'cmp-d ' + tone }, d === 0 ? '0' : `${d > 0 ? '+' : '−'}${rel != null ? Math.abs(rel) + '%' : 'нет базы'}`));
+  });
+  const shifts = areas
+    .map((a) => ({ a, d: tot[a.id].hours - pt[a.id].hours, now: tot[a.id].hours, was: pt[a.id].hours }))
+    .filter((x) => Math.abs(x.d) >= 0.5)
+    .sort((x, y) => Math.abs(y.d) - Math.abs(x.d))
+    .slice(0, 3);
+  return card(
+    'Сравнение с прошлым периодом',
+    h('div', { class: 'cmp' }, h('div', { class: 'cmp-row head' }, h('span', { class: 'cmp-l' }, ''), h('span', { class: 'cmp-v' }, 'Сейчас'), h('span', { class: 'cmp-p' }, 'Раньше'), h('span', { class: 'cmp-d' }, 'Разница')), rows),
+    shifts.length ? h('ul', { class: 'notes' }, shifts.map((x) => h('li', {}, `${x.a.name}: ${hrs(x.was)} → ${hrs(x.now)} (${x.d > 0 ? '+' : '−'}${hrs(Math.abs(x.d))})`))) : null,
+  );
+}
+
+function moodStatsCard(r) {
+  const ms = S.get().moods.filter((m) => m.date >= r.from && m.date <= r.to && m.mood > 0);
+  if (!ms.length) return null;
+  const av = (k) => {
+    const a = ms.filter((m) => m[k] > 0);
+    return a.length ? a.reduce((x, m) => x + m[k], 0) / a.length : null;
+  };
+  const f = (n, u = '') => (n == null ? '-' : `${(Math.round(n * 10) / 10).toString().replace('.', ',')}${u}`);
+  return card('Самочувствие', h('div', { class: 'kpis' }, kpi('Настроение', f(av('mood'))), kpi('Энергия', f(av('energy'))), kpi('Сон', f(av('sleep'), ' ч'))), h('div', { class: 'mood-strip' }, ms.sort((a, b) => a.date.localeCompare(b.date)).slice(-31).map((m) => h('div', { class: 'ms-col', title: `${fmtDay(m.date)}: ${m.mood}` }, h('div', { class: 'ms-bar', style: { height: `${m.mood * 20}%` } })))));
 }
 
 function barList(rows, fmt, total) {
   const sorted = rows.filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
   if (!sorted.length) return empty('Нет данных.');
   const max = sorted[0].v;
-  return h(
-    'div',
-    { class: 'bar-list' },
-    sorted.map(({ a, v }) =>
-      h('div', { class: 'bl-row' }, h('div', { class: 'bl-top' }, h('span', {}, dot(a.color), a.name), h('span', { class: 'bl-val' }, `${fmt(v)} · ${pct(v, total)}%`)), h('div', { class: 'bl-track' }, h('div', { class: 'bl-fill', style: { width: `${(v / max) * 100}%`, background: a.color } }))),
-    ),
-  );
+  return h('div', { class: 'bar-list' }, sorted.map(({ a, v }) => h('div', { class: 'bl-row' }, h('div', { class: 'bl-top' }, h('span', {}, dot(a.color), a.name), h('span', { class: 'bl-val' }, `${fmt(v)} · ${pct(v, total)}%`)), h('div', { class: 'bl-track' }, h('div', { class: 'bl-fill', style: { width: `${(v / max) * 100}%`, background: a.color } })))));
 }
 
 // ---- КАРТА СВЯЗЕЙ ----
@@ -329,7 +383,6 @@ function mapSections(r, tot, H, E, I) {
     const sh = share(a);
     if (sh.hs > 0) edges.append(s('line', { x1: timeP.x, y1: timeP.y, x2: p.x, y2: p.y, class: 'edge time', 'stroke-width': (1.5 + sh.hs * 12).toFixed(1) }));
     if (sh.es > 0) edges.append(s('line', { x1: moneyP.x, y1: moneyP.y, x2: p.x, y2: p.y, class: 'edge money', 'stroke-width': (1.5 + sh.es * 12).toFixed(1) }));
-    // проекты вокруг области
     const score = (id) => (H ? (pt[id]?.hours || 0) / H : 0) + (E ? (pt[id]?.expense || 0) / E : 0);
     const projs = S.projectsOf(a.id).filter((pr) => score(pr.id) > 0).sort((x, y) => score(y.id) - score(x.id)).slice(0, 3);
     projs.forEach((pr, j) => {
@@ -344,8 +397,7 @@ function mapSections(r, tot, H, E, I) {
   areas.forEach((a) => {
     const p = pos[a.id];
     const rad = 14 + 22 * Math.sqrt(share(a).both);
-    const g = s('g', { class: 'node' + (ui.mapSel === a.id ? ' sel' : ''), tabindex: '0', role: 'button', 'aria-label': a.name, onClick: () => ((ui.mapSel = ui.mapSel === a.id ? null : a.id), rerender()) }, s('circle', { cx: p.x, cy: p.y, r: rad.toFixed(1), fill: a.color }), s('text', { x: p.x, y: p.y + rad + 13, class: 'lbl', 'text-anchor': 'middle' }, a.name));
-    nodes.append(g);
+    nodes.append(s('g', { class: 'node' + (ui.mapSel === a.id ? ' sel' : ''), tabindex: '0', role: 'button', 'aria-label': a.name, onClick: () => ((ui.mapSel = ui.mapSel === a.id ? null : a.id), rerender()) }, s('circle', { cx: p.x, cy: p.y, r: rad.toFixed(1), fill: a.color }), s('text', { x: p.x, y: p.y + rad + 13, class: 'lbl', 'text-anchor': 'middle' }, a.name)));
   });
   nodes.append(
     s('g', {}, s('circle', { cx: timeP.x, cy: timeP.y, r: 25, class: 'res time' }), s('text', { x: timeP.x, y: timeP.y + 4, class: 'res-lbl', 'text-anchor': 'middle' }, 'Время')),
@@ -361,7 +413,6 @@ function mapSections(r, tot, H, E, I) {
     out.push(card(a.name, h('div', { class: 'kpis four' }, kpi('Время', hrs(t.hours)), kpi('Расходы', money(t.expense)), kpi('Доходы', money(t.income)), kpi('Задачи', `${t.done}/${t.done + t.open}`)), t.overdue ? h('p', { class: 'warn' }, `Просрочено задач: ${t.overdue}`) : null));
   }
 
-  // выводы из цифр
   const notes = [];
   const byH = [...areas].sort((x, y) => T[y.id].hours - T[x.id].hours);
   const byE = [...areas].sort((x, y) => T[y.id].expense - T[x.id].expense);
@@ -381,47 +432,65 @@ function mapSections(r, tot, H, E, I) {
   const topProj = Object.entries(pt).map(([id, v]) => ({ p: S.project(id), v })).filter((x) => x.p).sort((x, y) => y.v.hours - x.v.hours)[0];
   if (topProj && topProj.v.hours > 0) notes.push(`Главный проект по времени: «${topProj.p.name}», ${hrs(topProj.v.hours)}.`);
   out.push(card('Что видно по цифрам', notes.length ? h('ul', { class: 'notes' }, notes.map((n) => h('li', {}, n))) : empty('Пока мало данных для выводов.')));
+
+  const mi = S.moodInsights(90);
+  out.push(
+    card(
+      'Что совпадает с самочувствием',
+      mi.n < 10 ? empty(`Нужно хотя бы 10 дней с отметкой настроения, сейчас ${mi.n}. Отмечай настроение на экране «Сегодня», это занимает секунду.`) : mi.lines.length ? h('ul', { class: 'notes' }, mi.lines.map((n) => h('li', {}, n))) : empty('Явных связей за последние 90 дней не видно.'),
+      mi.n >= 10 ? h('p', { class: 'legend' }, 'Это совпадения по дням, а не доказательство причины. Но по ним видно, что стоит проверить.') : null,
+    ),
+  );
   out.push(card('Разбор с Claude', h('p', { class: 'muted' }, 'Скопируй сводку за период и вставь в чат. Там можно спросить, что менять.'), h('button', { class: 'btn primary', type: 'button', onClick: () => summarySheet(r.from, r.to) }, 'Сводка для Claude')));
   return out;
 }
 
-function summarySheet(from, to) {
+export function summarySheet(from, to) {
   const text = S.summaryText(from, to);
   const ta = h('textarea', { class: 'summary', readonly: true, rows: '14' });
   ta.value = text;
   F.openSheet(
     'Сводка для Claude',
     ta,
-    h(
-      'div',
-      { class: 'actions' },
-      h(
-        'button',
-        {
-          class: 'btn primary',
-          type: 'button',
-          onClick: async () => {
-            try {
-              await navigator.clipboard.writeText(text);
-              F.toast('Скопировано');
-            } catch (e) {
-              ta.select();
-              F.toast('Выдели и скопируй вручную');
-            }
-          },
-        },
-        'Скопировать',
-      ),
-    ),
+    h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'button', onClick: async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        F.toast('Скопировано');
+      } catch (e) {
+        ta.select();
+        F.toast('Выдели и скопируй вручную');
+      }
+    } }, 'Скопировать')),
   );
 }
 
 // ---- ЕЩЁ ----
+const menuRow = (href, title, sub) => h('a', { class: 'menu-row', href }, h('span', { class: 'menu-t' }, title), h('span', { class: 'menu-s' }, sub), h('span', { class: 'menu-c' }, '›'));
+
 export function moreView() {
   const st = S.get();
+  const t = today();
   const view = h('div', { class: 'view' }, pageHead('Ещё'));
 
-  // области и проекты
+  const activeSubs = st.subs.filter((x) => x.active);
+  const goalsOpen = st.goals.filter((g) => !S.goalProgress(g).done).length;
+  const orders = st.projects.filter((p) => p.order && !p.done).length;
+  const odo = S.lastOdo();
+  view.append(
+    h(
+      'nav',
+      { class: 'menu' },
+      menuRow('#subs', 'Платежи и подписки', activeSubs.length ? `${activeSubs.length} активных, ${money(activeSubs.reduce((a, x) => a + S.yearCost(x), 0))} в год` : 'Пока нет'),
+      menuRow('#goals', 'Цели', goalsOpen ? `${goalsOpen} в работе` : 'Пока нет'),
+      menuRow('#projects', 'Проекты и заказы', `${st.projects.length} проектов${orders ? `, заказов в работе: ${orders}` : ''}`),
+      menuRow('#car', 'Машина', odo ? `${new Intl.NumberFormat('ru-RU').format(odo.km)} км` : 'Пробег и обслуживание'),
+      menuRow('#review', 'Разбор недели', S.reviewOf(mondayOf(t)) ? 'Эта неделя разобрана' : 'Итоги и выводы'),
+      menuRow('#schedule', 'Расписание пар', st.lessons.length ? `${st.lessons.length} пар` : 'Чётная и нечётная недели'),
+      menuRow('#templates', 'Шаблоны', st.templates.length ? `${st.templates.length} шт.` : 'Быстрые записи в одно нажатие'),
+      menuRow('#import', 'Импорт выписки банка', 'Файл .xlsx'),
+    ),
+  );
+
   const areaBlocks = st.areas.map((a) =>
     h(
       'div',
@@ -432,12 +501,9 @@ export function moreView() {
   );
   view.append(card('Области и проекты', areaBlocks, h('button', { class: 'btn ghost', type: 'button', onClick: () => F.areaForm(null) }, '+ новая область')));
 
-  // сводка
-  const t = today();
   const wk = mondayOf(t);
   view.append(card('Сводка для разбора', h('p', { class: 'muted' }, 'Текст с цифрами за неделю, чтобы вставить в чат с Claude.'), h('button', { class: 'btn ghost', type: 'button', onClick: () => summarySheet(wk, addDays(wk, 6)) }, 'Сводка за эту неделю')));
 
-  // данные
   const c = S.counts();
   const file = h('input', { type: 'file', accept: 'application/json,.json', hidden: true });
   file.addEventListener('change', async () => {
@@ -461,37 +527,16 @@ export function moreView() {
       'Данные',
       h('p', { class: 'muted' }, `Задач: ${c.tasks}, событий: ${c.events}, денежных записей: ${c.money}, записей времени: ${c.time}.`),
       h('p', { class: 'muted' }, `Последняя копия: ${st.meta.lastExport ? fmtDay(st.meta.lastExport) : 'ещё не делал'}. Данные хранятся только в браузере этого телефона. Если очистить данные сайта, они пропадут, поэтому делай копию.`),
-      h(
-        'div',
-        { class: 'actions wrap' },
-        h('button', { class: 'btn primary', type: 'button', onClick: exportData }, 'Скачать копию'),
-        h('button', { class: 'btn ghost', type: 'button', onClick: () => file.click() }, 'Загрузить копию'),
-        file,
-      ),
+      h('div', { class: 'actions wrap' }, h('button', { class: 'btn primary', type: 'button', onClick: exportData }, 'Скачать копию'), h('button', { class: 'btn ghost', type: 'button', onClick: () => file.click() }, 'Загрузить копию'), file),
       S.didSaveFail() ? h('p', { class: 'warn' }, 'Не удалось сохранить данные в память браузера. Сделай копию сейчас.') : null,
     ),
-  );
-
-  // оформление и опасная зона
-  view.append(
     card('Оформление', seg([['auto', 'Как в системе'], ['light', 'Светлая'], ['dark', 'Тёмная']], st.meta.theme, (v) => S.setMeta({ theme: v }))),
-    card(
-      'Опасная зона',
-      h(
-        'button',
-        {
-          class: 'btn danger',
-          type: 'button',
-          onClick: () => {
-            if (confirm('Удалить все данные приложения на этом телефоне? Это нельзя отменить.') && confirm('Точно удалить? Копию ты сделал?')) {
-              S.reset();
-              F.toast('Всё очищено');
-            }
-          },
-        },
-        'Стереть все данные',
-      ),
-    ),
+    card('Опасная зона', h('button', { class: 'btn danger', type: 'button', onClick: () => {
+      if (confirm('Удалить все данные приложения на этом телефоне? Это нельзя отменить.') && confirm('Точно удалить? Копию ты сделал?')) {
+        S.reset();
+        F.toast('Всё очищено');
+      }
+    } }, 'Стереть все данные')),
   );
   return view;
 }
