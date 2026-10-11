@@ -522,7 +522,25 @@ export function moreView() {
       alert('Не получилось прочитать файл. Нужен JSON, который сделало это приложение.');
     }
   });
+  const taskFile = h('input', { type: 'file', accept: 'application/json,.json', hidden: true });
+  taskFile.addEventListener('change', async () => {
+    const f = taskFile.files[0];
+    taskFile.value = '';
+    if (!f) return;
+    try {
+      const r = S.mergeTasks(JSON.parse(await f.text()));
+      if (!r.total) alert('В файле нет задач. Нужен файл задач, который сделал Claude.');
+      else F.toast(`Добавлено задач: ${r.added}${r.skipped ? `, уже были: ${r.skipped}` : ''}`);
+    } catch (e) {
+      alert('Не получилось прочитать файл задач. Нужен JSON, который сделал Claude.');
+    }
+  });
   view.append(
+    card(
+      'Задачи из файла',
+      h('p', { class: 'muted' }, 'Добавляет задачи из файла от Claude к уже существующим. Остальные данные не трогает, задачи с тем же названием не повторяет.'),
+      h('div', { class: 'actions wrap' }, h('button', { class: 'btn ghost', type: 'button', onClick: () => taskFile.click() }, 'Добавить задачи из файла'), taskFile),
+    ),
     card(
       'Данные',
       h('p', { class: 'muted' }, `Задач: ${c.tasks}, событий: ${c.events}, денежных записей: ${c.money}, записей времени: ${c.time}.`),

@@ -381,6 +381,39 @@ export function replaceAll(raw) {
   state = normalize(raw);
   commit();
 }
+
+// Дописать задачи из файла, не трогая остальные данные. Формат файла:
+// { "tasks": [ { "title": "...", "date": "2026-10-13" или пусто, "area": "Учёба" (имя или id области), "prio": 1 } ] }
+// Задача с тем же названием среди открытых уже есть: пропускается.
+export function mergeTasks(raw) {
+  const list = raw && Array.isArray(raw.tasks) ? raw.tasks : [];
+  const byName = new Map(state.areas.map((a) => [a.name.trim().toLowerCase(), a.id]));
+  const ids = new Set(state.areas.map((a) => a.id));
+  const prepared = list
+    .filter((t) => t && typeof t === 'object')
+    .map((t) => {
+      const a = typeof t.area === 'string' ? t.area.trim() : '';
+      const area = ids.has(a) ? a : byName.get(a.toLowerCase()) || state.meta.lastArea || state.areas[0].id;
+      return { title: t.title, date: t.date, area, prio: t.prio, done: !!t.done, project: '' };
+    });
+  // normalize проверяет и обрезает поля так же, как при обычной загрузке
+  const clean = normalize({ areas: state.areas, projects: [], tasks: prepared }).tasks;
+  const open = new Set(state.tasks.filter((t) => !t.done).map((t) => t.title.trim().toLowerCase()));
+  let added = 0;
+  let skipped = 0;
+  for (const t of clean) {
+    const key = t.title.trim().toLowerCase();
+    if (open.has(key)) {
+      skipped++;
+      continue;
+    }
+    open.add(key);
+    state.tasks.push({ ...t, id: uid() });
+    added++;
+  }
+  if (added) commit();
+  return { added, skipped, total: list.length };
+}
 export function reset() {
   state = fresh();
   commit();
